@@ -26,28 +26,35 @@ def get_bot_app():
     """Get or create bot application instance"""
     global _app
     if _app is None:
-        _app = setup_bot()
-        logger.info("✅ Bot application initialized for Vercel")
+        try:
+            _app = setup_bot()
+            logger.info("✅ Bot application initialized for Vercel")
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize bot: {e}")
+            raise
     return _app
 
 class handler(BaseHTTPRequestHandler):
     """
-    Vercel serverless function handler.
-    This class MUST be named 'handler' and inherit from BaseHTTPRequestHandler.
+    Vercel serverless function handler for Telegram webhook.
     """
     
     def do_GET(self):
         """Handle GET requests (health check)"""
-        self.send_response(200)
-        self.send_header('Content-type', 'application/json')
-        self.end_headers()
-        
-        response = {
-            'status': 'ok',
-            'message': 'Bot is running on Vercel',
-            'timestamp': datetime.now().isoformat()
-        }
-        self.wfile.write(json.dumps(response).encode('utf-8'))
+        try:
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            
+            response = {
+                'status': 'ok',
+                'message': 'Bot is running on Vercel',
+                'timestamp': datetime.now().isoformat()
+            }
+            self.wfile.write(json.dumps(response).encode('utf-8'))
+        except Exception as e:
+            logger.error(f"GET error: {e}")
+            self.send_error(500, str(e))
         return
 
     def do_POST(self):
@@ -58,6 +65,7 @@ class handler(BaseHTTPRequestHandler):
             post_data = self.rfile.read(content_length)
             
             if not post_data:
+                logger.warning("Empty request body received")
                 self.send_response(400)
                 self.send_header('Content-type', 'application/json')
                 self.end_headers()
@@ -65,8 +73,16 @@ class handler(BaseHTTPRequestHandler):
                 return
 
             # Parse the update
-            update_data = json.loads(post_data.decode('utf-8'))
-            
+            try:
+                update_data = json.loads(post_data.decode('utf-8'))
+            except json.JSONDecodeError as e:
+                logger.error(f"Invalid JSON: {e}")
+                self.send_response(400)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({'error': 'Invalid JSON'}).encode('utf-8'))
+                return
+
             # Get bot application
             app = get_bot_app()
             
@@ -83,11 +99,18 @@ class handler(BaseHTTPRequestHandler):
                 self.send_header('Content-type', 'application/json')
                 self.end_headers()
                 self.wfile.write(json.dumps({'status': 'ok'}).encode('utf-8'))
+                logger.info(f"✅ Processed update: {update.update_id if update else 'unknown'}")
+            except Exception as e:
+                logger.error(f"Error processing update: {e}", exc_info=True)
+                self.send_response(500)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({'error': str(e)}).encode('utf-8'))
             finally:
                 loop.close()
                 
         except Exception as e:
-            logger.error(f"Error processing request: {e}")
+            logger.error(f"Webhook error: {e}", exc_info=True)
             self.send_response(500)
             self.send_header('Content-type', 'application/json')
             self.end_headers()
